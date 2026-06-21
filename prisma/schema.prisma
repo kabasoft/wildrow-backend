@@ -1,1 +1,134 @@
+// Wildrow Crowdsourced Micro-Investment Platform
+// Prisma schema — fractional ledger, KYC, charges, reconciliation
+// Maps directly onto Appendix C (Architecture & API Specifications) of the
+// Regulatory Sandbox Admission Report.
 
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum KycTier {
+  UNVERIFIED
+  TIER_1_VERIFIED // MNO-matched identity + NRC, per Rule 2020 relaxation request
+  TIER_2_VERIFIED // future: full physical verification
+}
+
+enum MnoNetwork {
+  MTN
+  AIRTEL
+  ZAMTEL
+}
+
+enum ChargeStatus {
+  PENDING_CUSTOMER_PIN
+  SUCCESSFUL
+  FAILED
+  EXPIRED
+}
+
+enum TransactionType {
+  TOPUP
+  WITHDRAWAL
+  YIELD_CREDIT
+  MANAGEMENT_FEE
+}
+
+model User {
+  id                       String   @id @default(uuid())
+  phoneNumber              String   @unique
+  fullName                 String?
+  network                  MnoNetwork?
+  nationalRegistrationNo   String?
+  kycTier                  KycTier  @default(UNVERIFIED)
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+
+  wallet                   Wallet?
+  charges                  Charge[]
+  transactions             Transaction[]
+  microUnits               MicroUnit[]
+}
+
+// One wallet per investor — the "Fractional Ledger" balance the doc describes
+// as updating in real time via the Continuous NAV Engine.
+model Wallet {
+  id              String   @id @default(uuid())
+  userId          String   @unique
+  user            User     @relation(fields: [userId], references: [id])
+  principalZmw    Decimal  @default(0) @db.Decimal(18, 2)
+  accruedYieldZmw Decimal  @default(0) @db.Decimal(18, 6)
+  updatedAt       DateTime @updatedAt
+}
+
+// A whole K30,000 lot purchased from a Bank of Zambia primary auction,
+// algorithmically split into 300 fungible K100 MicroUnits (Appendix D, 2A).
+model TBillLot {
+  id              String      @id @default(uuid())
+  isinOrAuctionId String      @unique
+  tenorDays       Int // e.g. 182, 273, 364
+  nominalRateApy  Decimal     @db.Decimal(6, 4) // gross annualized rate at auction
+  lotSizeZmw      Decimal     @db.Decimal(18, 2) // 30000.00
+  unitSizeZmw     Decimal     @default(100.00) @db.Decimal(18, 2)
+  totalUnits      Int // lotSizeZmw / unitSizeZmw, e.g. 300
+  unitsIssued     Int         @default(0)
+  purchasedAt     DateTime    @default(now())
+  maturesAt       DateTime
+  microUnits      MicroUnit[]
+}
+
+// One MicroUnit = one investor's K100 (or multiple of K100) claim against a lot.
+model MicroUnit {
+  id           String   @id @default(uuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id])
+  lotId        String
+  lot          TBillLot @relation(fields: [lotId], references: [id])
+  faceValueZmw Decimal  @default(100.00) @db.Decimal(18, 2)
+  navAtIssue   Decimal  @db.Decimal(18, 6)
+  issuedAt     DateTime @default(now())
+}
+
+// Inbound cash-in request — maps 1:1 onto the "POST /v3/charges" payload model.
+model Charge {
+  id                String       @id @default(uuid())
+  userId            String
+  user              User         @relation(fields: [userId], references: [id])
+  txRef             String       @unique // WR-MMF-<uuid>
+  flwRef            String? // assigned once the MNO gateway acknowledges
+  amountZmw         Decimal      @db.Decimal(18, 2)
+  currency          String       @default("ZMW")
+  network            MnoNetwork
+  phoneNumber       String
+  status            ChargeStatus @default(PENDING_CUSTOMER_PIN)
+  mnoTransactionId  String?
+  createdAt         DateTime     @default(now())
+  completedAt       DateTime?
+}
+
+model Transaction {
+  id          String          @id @default(uuid())
+  userId      String
+  user        User            @relation(fields: [userId], references: [id])
+  type        TransactionType
+  amountZmw   Decimal         @db.Decimal(18, 6)
+  reference   String?
+  createdAt   DateTime        @default(now())
+}
+
+// One row per business day — tracks the generated EOD reconciliation CSV
+// handed to the Custodian Bank over SFTP (Appendix C, Section 4).
+model ReconciliationBatch {
+  id              String   @id @default(uuid())
+  businessDate    DateTime @db.Date
+  fileName        String // WR_RECON_YYYYMMDD.csv
+  grossAmountZmw  Decimal  @db.Decimal(18, 2)
+  netToSweepZmw   Decimal  @db.Decimal(18, 2)
+  rowCount        Int
+  transmittedAt   DateTime?
+  createdAt       DateTime @default(now())
+}
