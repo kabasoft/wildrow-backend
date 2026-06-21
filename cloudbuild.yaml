@@ -1,0 +1,134 @@
+## Wildrow backend — Cloud Build pipeline (Cloud Run target)
+#
+# Triggered by two Cloud Build Triggers pointed at this same file, each
+# supplying different substitution values (see /docs or CI_CD_GUIDE.md):
+#   - "wildrow-backend-staging"   -> push to `develop`   -> _ENVIRONMENT=staging
+#   - "wildrow-backend-prod"      -> push to `main`      -> _ENVIRONMENT=production
+#
+# Required substitutions (set per-trigger in the GCP Console / gcloud):
+#   _REGION              e.g. africa-south1 (Johannesburg) or europe-west1
+#   _AR_REPO             Artifact Registry repo name, e.g. wildrow-images
+#   _SERVICE_NAME        Cloud Run service name, e.g. wildrow-backend-staging
+#   _CLOUDSQL_INSTANCE   PROJECT:REGION:INSTANCE connection name
+#   _ENVIRONMENT         staging | production
+#   _MIN_INSTANCES       0 for staging, 1+ for production (avoids cold start)
+#   _MAX_INSTANCES       e.g. 10
+#   _VPC_CONNECTOR       Serverless VPC Access connector name
+
+substitutions:
+  _REGION: africa-south1
+  _AR_REPO: wildrow-images
+  _SERVICE_NAME: wildrow-backend-staging
+  _ENVIRONMENT: staging
+  _MIN_INSTANCES: "0"
+  _MAX_INSTANCES: "10"
+  _VPC_CONNECTOR: wildrow-vpc-connector
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: E2_HIGHCPU_8
+
+steps:
+  # 1. Install dependencies (cached layer reused across steps via /workspace)
+  - id: install
+    name: node:20-alpine
+    entrypoint: npm
+    args: ["ci"]
+
+  # 2. Lint
+  - id: lint
+    name: node:20-alpine
+    entrypoint: npm
+    args: ["run", "lint"]
+    waitFor: ["install"]
+
+  # 3. Generate Prisma client (needed for typecheck + unit tests)
+  - id: prisma-generate
+    name: node:20-alpine
+    entrypoint: npx
+    args: ["prisma", "generate"]
+    waitFor: ["install"]
+
+  # 4. Unit tests
+  - id: test
+    name: node:20-alpine
+    entrypoint: npm
+    args: ["run", "test"]
+    waitFor: ["prisma-generate"]
+
+  # 5. Build & tag the production image (build args baked at build time are
+  #    NOT secrets — runtime secrets are injected via Cloud Run env/Secret
+  #    Manager bindings in the deploy step, never baked into the image).
+  - id: docker-build
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - "-t"
+      - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_AR_REPO}/backend:${SHORT_SHA}"
+      - "-t"
+      - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_AR_REPO}/backend:${_ENVIRONMENT}-latest"
+      - "."
+    waitFor: ["test"]
+
+  # 6. Push both tags to Artifact Registry
+  - id: docker-push
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - "--all-tags"
+      - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_AR_REPO}/backend"
+    waitFor: ["docker-build"]
+
+  # 7. Run database migrations as a one-off Cloud Run Job execution against
+  #    Cloud SQL over the private VPC connector — runs to completion BEFORE
+  #    traffic is routed to the new revision.
+  - id: run-migrations
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - "-c"
+      - |
+        gcloud run jobs deploy wildrow-migrate-${_ENVIRONMENT} \
+          --image="${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_AR_REPO}/backend:${SHORT_SHA}" \
+          --region="${_REGION}" \
+          --vpc-connector="${_VPC_CONNECTOR}" \
+          --set-cloudsql-instances="${_CLOUDSQL_INSTANCE}" \
+          --set-secrets="DATABASE_URL=wildrow-database-url-${_ENVIRONMENT}:latest" \
+          --command="npx" \
+          --args="prisma,migrate,deploy" \
+          --max-retries=1 \
+          --task-timeout=300
+        gcloud run jobs execute wildrow-migrate-${_ENVIRONMENT} --region="${_REGION}" --wait
+    waitFor: ["docker-push"]
+
+  # 8. Deploy the new revision to Cloud Run. Secrets are bound by reference
+  #    (never passed as plain substitutions) and traffic only cuts over
+  #    after the revision passes its startup probe (/healthz).
+  - id: deploy
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - "${_SERVICE_NAME}"
+      - "--image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_AR_REPO}/backend:${SHORT_SHA}"
+      - "--region=${_REGION}"
+      - "--platform=managed"
+      - "--vpc-connector=${_VPC_CONNECTOR}"
+      - "--vpc-egress=private-ranges-only"
+      - "--set-cloudsql-instances=${_CLOUDSQL_INSTANCE}"
+      - "--set-secrets=DATABASE_URL=wildrow-database-url-${_ENVIRONMENT}:latest,JWT_SECRET=wildrow-jwt-secret-${_ENVIRONMENT}:latest,MNO_HMAC_SECRET=wildrow-mno-hmac-${_ENVIRONMENT}:latest"
+      - "--set-env-vars=NODE_ENV=${_ENVIRONMENT},CORS_ORIGINS=https://app.wildrow.co.zm"
+      - "--min-instances=${_MIN_INSTANCES}"
+      - "--max-instances=${_MAX_INSTANCES}"
+      - "--cpu=1"
+      - "--memory=512Mi"
+      - "--no-allow-unauthenticated" # fronted by API Gateway / Load Balancer with IAP or signed requests
+      - "--quiet"
+    waitFor: ["run-migrations"]
+
+images:
+  - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_AR_REPO}/backend:${SHORT_SHA}"
+  - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_AR_REPO}/backend:${_ENVIRONMENT}-latest"
+
+timeout: 1200s

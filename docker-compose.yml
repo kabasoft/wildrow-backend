@@ -1,0 +1,38 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: wildrow
+      POSTGRES_PASSWORD: wildrow_dev
+      POSTGRES_DB: wildrow
+    ports:
+      - "5432:5432"
+    volumes:
+      - wildrow_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wildrow"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: development
+      PORT: 8080
+      DATABASE_URL: postgresql://wildrow:wildrow_dev@postgres:5432/wildrow?schema=public
+      JWT_SECRET: dev-secret-change-me
+      MNO_HMAC_SECRET: dev-hmac-secret-change-me
+      CORS_ORIGINS: http://localhost:5173
+    ports:
+      - "8080:8080"
+    command: sh -c "npx prisma migrate deploy && node dist/main.js"
+
+volumes:
+  wildrow_pg_data:
