@@ -122,7 +122,7 @@ steps:
       - "--vpc-egress=private-ranges-only"
       - "--set-cloudsql-instances=${_CLOUDSQL_INSTANCE}"
       - "--set-secrets=DATABASE_URL=wildrow-database-url-${_ENVIRONMENT}:latest,JWT_SECRET=wildrow-jwt-secret-${_ENVIRONMENT}:latest,MNO_HMAC_SECRET=wildrow-mno-hmac-${_ENVIRONMENT}:latest"
-      - "--set-env-vars=NODE_ENV=${_ENVIRONMENT},CORS_ORIGINS=https://app.wildrow.co.zm"
+      - "--set-env-vars=^@^NODE_ENV=${_ENVIRONMENT}@CORS_ORIGINS=https://wildrow-frontend-staging-qdq3ac77sa-bq.a.run.app,https://app.wildrow.co.zm"
       - "--min-instances=${_MIN_INSTANCES}"
       - "--max-instances=${_MAX_INSTANCES}"
       - "--cpu=1"
