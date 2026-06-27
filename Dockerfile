@@ -1,11 +1,11 @@
 # ---- deps ----
-FROM node:20-alpine AS deps
+FROM node:20-bullseye-slim AS deps
 WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN npm ci
 
 # ---- build ----
-FROM node:20-alpine AS build
+FROM node:20-bullseye-slim AS build
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
@@ -13,10 +13,10 @@ RUN npx prisma generate
 RUN npm run build
 
 # ---- production ----
-FROM node:20-alpine AS production
+FROM node:20-bullseye-slim AS production
 WORKDIR /app
 ENV NODE_ENV=production
-RUN addgroup -S wildrow && adduser -S wildrow -G wildrow
+RUN groupadd -r wildrow && useradd -r -g wildrow wildrow
 
 COPY package.json package-lock.json* ./
 RUN npm ci --omit=dev

@@ -91,11 +91,14 @@ steps:
         gcloud run jobs deploy wildrow-migrate-${_ENVIRONMENT} \
           --image="${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_AR_REPO}/backend:${SHORT_SHA}" \
           --region="${_REGION}" \
+          --service-account="wildrow-${_ENVIRONMENT}-backend@${PROJECT_ID}.iam.gserviceaccount.com" \
           --vpc-connector="${_VPC_CONNECTOR}" \
           --set-cloudsql-instances="${_CLOUDSQL_INSTANCE}" \
           --set-secrets="DATABASE_URL=wildrow-database-url-${_ENVIRONMENT}:latest" \
           --command="npx" \
-          --args="prisma,migrate,deploy" \
+          --args="prisma" \
+          --args="migrate" \
+          --args="deploy" \
           --max-retries=1 \
           --task-timeout=300
         gcloud run jobs execute wildrow-migrate-${_ENVIRONMENT} --region="${_REGION}" --wait
@@ -114,6 +117,7 @@ steps:
       - "--image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_AR_REPO}/backend:${SHORT_SHA}"
       - "--region=${_REGION}"
       - "--platform=managed"
+      - "--service-account=wildrow-${_ENVIRONMENT}-backend@${PROJECT_ID}.iam.gserviceaccount.com"
       - "--vpc-connector=${_VPC_CONNECTOR}"
       - "--vpc-egress=private-ranges-only"
       - "--set-cloudsql-instances=${_CLOUDSQL_INSTANCE}"
@@ -123,7 +127,7 @@ steps:
       - "--max-instances=${_MAX_INSTANCES}"
       - "--cpu=1"
       - "--memory=512Mi"
-      - "--no-allow-unauthenticated" # fronted by API Gateway / Load Balancer with IAP or signed requests
+      - "--allow-unauthenticated"
       - "--quiet"
     waitFor: ["run-migrations"]
 

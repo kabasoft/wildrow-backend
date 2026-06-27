@@ -6,6 +6,7 @@ export class MtnProvider implements MnoProvider {
   readonly network = 'MTN' as const;
 
   async triggerStkPush(req: StkPushRequest): Promise<StkPushResult> {
+    void req;
     // Production: POST to MTN MoMo Collections API /requesttopay
     return {
       flwRef: `MNO-MTN-${Math.floor(100000000 + Math.random() * 900000000)}`,

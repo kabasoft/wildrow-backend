@@ -63,7 +63,6 @@ export class LedgerService {
     const remainder = amountZmw - wholeUnits * unitSize; // any non-K100-multiple residue is still credited to principal
 
     let remaining = wholeUnits;
-    const createdUnits: { id: string }[] = [];
 
     while (remaining > 0) {
       const lot = await this.getOrOpenActiveLot();
