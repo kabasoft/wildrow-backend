@@ -95,10 +95,9 @@ steps:
           --vpc-connector="${_VPC_CONNECTOR}" \
           --set-cloudsql-instances="${_CLOUDSQL_INSTANCE}" \
           --set-secrets="DATABASE_URL=wildrow-database-url-${_ENVIRONMENT}:latest" \
-          --command="npx" \
-          --args="prisma" \
-          --args="migrate" \
-          --args="deploy" \
+          --command="bash" \
+          --args="-lc" \
+          --args="export HOME=/tmp; export npm_config_cache=/tmp/.npm; export npm_config_prefix=/tmp/.npm-global; export PATH=\$npm_config_prefix/bin:\$PATH; /usr/local/bin/npm install -g prisma@5.19.1; /tmp/.npm-global/bin/prisma db push --schema=/app/prisma/schema.prisma" \
           --max-retries=1 \
           --task-timeout=300
         gcloud run jobs execute wildrow-migrate-${_ENVIRONMENT} --region="${_REGION}" --wait
